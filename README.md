@@ -9,10 +9,8 @@
 Добавьте этот тег в Custom Code вашего Webflow сайта:
 
 ```html
-<script type="module" src="https://cdn.jsdelivr.net/gh/ВАШ_GITHUB_USERNAME/mp-system-globe-map@latest/script.js"></script>
+<script type="module" src="https://cdn.jsdelivr.net/gh/ruslanobel/mp-system-globe-map@latest/script.js"></script>
 ```
-
-**Важно:** После первого пуша замените `ВАШ_GITHUB_USERNAME` на ваш реальный GitHub username.
 
 ### Конфигурация
 
@@ -50,7 +48,7 @@ git push origin main
 
 ```html
 <!-- Используйте версию с конкретным коммитом -->
-<script type="module" src="https://cdn.jsdelivr.net/gh/ВАШ_USERNAME/mp-system-globe-map@COMMIT_SHA/script.js"></script>
+<script type="module" src="https://cdn.jsdelivr.net/gh/ruslanobel/mp-system-globe-map@COMMIT_SHA/script.js"></script>
 ```
 
 Или очистите кэш jsDelivr: https://www.jsdelivr.com/tools/purge
