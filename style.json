@@ -1,0 +1,48 @@
+{
+    "version": 8,
+    "name": "Minimalist Globe Style",
+    "metadata": {
+        "mapbox:sdk-support": {
+            "js": "3.17.0",
+            "android": "11.17.0",
+            "ios": "11.17.0"
+        }
+    },
+    "sources": {
+        "mapbox://mapbox.mapbox-streets-v8": {
+            "url": "mapbox://mapbox.mapbox-streets-v8",
+            "type": "vector"
+        }
+    },
+    "sprite": "mapbox://sprites/ruslan-obel/cmit1vgga002501s612mlecmi/ck2u8j60r58fu0sgyxrigm3cu",
+    "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+    "layers": [
+        {
+            "id": "background",
+            "type": "background",
+            "paint": {"background-color": "#BFBFBF"}
+        },
+        {
+            "id": "water",
+            "type": "fill",
+            "source": "mapbox://mapbox.mapbox-streets-v8",
+            "source-layer": "water",
+            "paint": {"fill-color": "#DFDFDF"}
+        },
+        {
+            "id": "admin-country",
+            "type": "line",
+            "source": "mapbox://mapbox.mapbox-streets-v8",
+            "source-layer": "admin",
+            "filter": ["==", ["get", "admin_level"], 0],
+            "paint": {"line-color": "#DFDFDF", "line-width": 2}
+        }
+    ],
+    "created": "2025-12-05T15:59:18.538Z",
+    "modified": "2025-12-05T15:59:18.538Z",
+    "id": "cmit1vgga002501s612mlecmi",
+    "owner": "ruslan-obel",
+    "visibility": "private",
+    "protected": false,
+    "draft": false
+}
