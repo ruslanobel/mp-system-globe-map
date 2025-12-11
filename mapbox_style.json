@@ -1,0 +1,45 @@
+{
+    "version": 8,
+    "name": "Minimalist Globe Style",
+    "metadata": {},
+    "sources": {
+        "mapbox-streets": {
+            "type": "vector",
+            "url": "mapbox://mapbox.mapbox-streets-v8"
+        }
+    },
+    "layers": [
+        {
+            "id": "background",
+            "type": "background",
+            "paint": {
+                "background-color": "#BFBFBF"
+            }
+        },
+        {
+            "id": "water",
+            "source": "mapbox-streets",
+            "source-layer": "water",
+            "type": "fill",
+            "paint": {
+                "fill-color": "#DFDFDF"
+            }
+        },
+        {
+            "id": "admin-country",
+            "source": "mapbox-streets",
+            "source-layer": "admin",
+            "type": "line",
+            "filter": [
+                "==",
+                "admin_level",
+                0
+            ],
+            "paint": {
+                "line-color": "#DFDFDF",
+                "line-width": 2
+            }
+        }
+    ],
+    "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf"
+}

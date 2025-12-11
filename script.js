@@ -32,8 +32,12 @@ class MapController {
       
       await new Promise((resolve) => this.map.on('load', resolve));
       
+      // ФАЗА 2: Отключаем зум колесиком
+      this.map.scrollZoom.disable();
+      
       console.log('✅ Map initialized successfully');
       console.log('✅ Drag is enabled by default');
+      console.log('✅ Scroll zoom disabled');
     } catch (error) {
       throw error;
     }

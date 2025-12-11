@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MP System - Map</title>
+    
+    <!-- Mapbox GL JS v3.17.0 -->
+    <script src='https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.css' rel='stylesheet' />
+    
+    <!-- Mapbox Access Token -->
+    <script>
+        window.MAPBOX_ACCESS_TOKEN = 'pk.eyJ1IjoicnVzbGFuLW9iZWwiLCJhIjoiY21pcHVnZW03MDZoaDNrczg1dW85M3h0YSJ9.YhTGXN-mgeoWWXiJtybdXg';
+    </script>
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- Контейнер карты -->
+    <div id="globe-map"></div>
+    
+    <!-- Collection List: Страны (может быть скрыт) -->
+    <div class="countries-list" style="display: none;">
+        <!-- Страна: Austria -->
+        <div data-map-country-item data-map-country-name="Austria">
+            <span>Austria</span>
+        </div>
+        
+        <!-- Страна: Croatia -->
+        <div data-map-country-item data-map-country-name="Croatia">
+            <span>Croatia</span>
+        </div>
+        
+        <!-- Страна: Czech Republic -->
+        <div data-map-country-item data-map-country-name="Czech Republic">
+            <span>Czech Republic</span>
+        </div>
+        
+        <!-- Страна: Estonia -->
+        <div data-map-country-item data-map-country-name="Estonia">
+            <span>Estonia</span>
+        </div>
+        
+        <!-- Страна: Germany -->
+        <div data-map-country-item data-map-country-name="Germany">
+            <span>Germany</span>
+        </div>
+        
+        <!-- Страна: Hungary -->
+        <div data-map-country-item data-map-country-name="Hungary">
+            <span>Hungary</span>
+        </div>
+        
+        <!-- Страна: Italy -->
+        <div data-map-country-item data-map-country-name="Italy">
+            <span>Italy</span>
+        </div>
+        
+        <!-- Страна: Latvia -->
+        <div data-map-country-item data-map-country-name="Latvia">
+            <span>Latvia</span>
+        </div>
+        
+        <!-- Страна: Lithuania -->
+        <div data-map-country-item data-map-country-name="Lithuania">
+            <span>Lithuania</span>
+        </div>
+        
+        <!-- Страна: Netherlands -->
+        <div data-map-country-item data-map-country-name="Netherlands">
+            <span>Netherlands</span>
+        </div>
+        
+        <!-- Страна: Poland -->
+        <div data-map-country-item data-map-country-name="Poland">
+            <span>Poland</span>
+        </div>
+        
+        <!-- Страна: Portugal -->
+        <div data-map-country-item data-map-country-name="Portugal">
+            <span>Portugal</span>
+        </div>
+        
+        <!-- Страна: Slovakia -->
+        <div data-map-country-item data-map-country-name="Slovakia">
+            <span>Slovakia</span>
+        </div>
+        
+        <!-- Страна: Slovenia -->
+        <div data-map-country-item data-map-country-name="Slovenia">
+            <span>Slovenia</span>
+        </div>
+        
+        <!-- Страна: Spain -->
+        <div data-map-country-item data-map-country-name="Spain">
+            <span>Spain</span>
+        </div>
+        
+        <!-- Страна: Ukraine -->
+        <div data-map-country-item data-map-country-name="Ukraine">
+            <span>Ukraine</span>
+        </div>
+    </div>
+    
+    <!-- Collection List: Офисы (может быть скрыт) -->
+    <div class="offices-list" style="display: none;">
+        <!-- Офис: Germany -->
+        <div 
+            data-map-office-item 
+            data-map-office-address="Rosa-Luxemburg-Straße 49, 10178 Berlin, Germany"
+            data-map-office-phone="1234567890"
+            data-map-office-email="exmle@mail.com"
+            data-map-office-link="https://maps.app.goo.gl/D8FVhwGsPJkcacjB8">
+            <h3 data-map-office-name>Germany office</h3>
+            <div data-map-office-description>
+                <ul>
+                    <li>list1</li>
+                    <li>list 2</li>
+                    <li>list 3</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Tooltip для названия страны (скрыт по умолчанию) -->
+    <div data-map-tooltip class="map-tooltip">
+        <span data-map-tooltip-text></span>
+    </div>
+    
+    <!-- Модальное окно для офиса (скрыто по умолчанию) -->
+    <div data-map-modal class="map-modal">
+        <div class="map-modal-content">
+            <button data-map-modal-close class="map-modal-close">&times;</button>
+            <div data-map-modal-content></div>
+        </div>
+    </div>
+    
+    <!-- Шаблон пина офиса (скрыт) -->
+    <div data-map-pin-template class="map-pin" style="display: none;">
+        <div class="pin-icon">📍</div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+
+</html>
