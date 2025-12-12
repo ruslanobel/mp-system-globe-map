@@ -8,6 +8,9 @@
             "ios": "11.17.0"
         }
     },
+    "projection": {
+        "name": "globe"
+    },
     "sources": {
         "mapbox://mapbox.mapbox-streets-v8": {
             "url": "mapbox://mapbox.mapbox-streets-v8",
@@ -20,14 +23,18 @@
         {
             "id": "background",
             "type": "background",
-            "paint": {"background-color": "#BFBFBF"}
+            "paint": {
+                "background-color": "#BFBFBF"
+            }
         },
         {
             "id": "water",
             "type": "fill",
             "source": "mapbox://mapbox.mapbox-streets-v8",
             "source-layer": "water",
-            "paint": {"fill-color": "#DFDFDF"}
+            "paint": {
+                "fill-color": "#DFDFDF"
+            }
         },
         {
             "id": "admin-country",
@@ -35,7 +42,10 @@
             "source": "mapbox://mapbox.mapbox-streets-v8",
             "source-layer": "admin",
             "filter": ["==", ["get", "admin_level"], 0],
-            "paint": {"line-color": "#DFDFDF", "line-width": 2}
+            "paint": {
+                "line-color": "#DFDFDF",
+                "line-width": 2
+            }
         }
     ],
     "created": "2025-12-05T15:59:18.538Z",
