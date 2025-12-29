@@ -693,11 +693,16 @@
       findCountryFeature({ iso, name }) {
         if (!this.geojsonData?.features?.length) return null;
         const normalizedIso = normalizeIsoCode(iso);
+        const normalizedName = normalizeCountryName(name);
         if (normalizedIso) {
           const byA3 = this._featureByIsoA3.get(normalizedIso);
           if (byA3) return byA3;
           const byA2 = this._featureByIsoA2.get(normalizedIso);
           if (byA2) return byA2;
+        }
+        if (normalizedName) {
+          const byName = this._featureByName.get(normalizedName);
+          if (byName) return byName;
         }
         const matchesIso = (props) => {
           if (!normalizedIso) return false;
@@ -711,9 +716,31 @@
           ];
           return candidates.some((candidate) => normalizeIsoCode(candidate) === normalizedIso);
         };
+        const matchesName = (props) => {
+          if (!normalizedName) return false;
+          const candidates = [
+            props.name_en,
+            props.NAME_EN,
+            props.name,
+            props.NAME
+          ];
+          return candidates.some((candidate) => normalizeCountryName(candidate) === normalizedName);
+        };
+        const matchesNameLoosely = (props) => {
+          if (!normalizedName) return false;
+          const candidates = [
+            props.name_en,
+            props.NAME_EN,
+            props.name,
+            props.NAME
+          ]
+            .map((candidate) => normalizeCountryName(candidate))
+            .filter(Boolean);
+          return candidates.some((candidate) => candidate.includes(normalizedName) || normalizedName.includes(candidate));
+        };
         for (const feature of this.geojsonData.features) {
           const props = feature?.properties || {};
-          if (matchesIso(props)) {
+          if (matchesIso(props) || matchesName(props) || matchesNameLoosely(props)) {
             return feature;
           }
         }
@@ -791,12 +818,8 @@
       }
 
       async resolveFocusTarget({ iso, name }) {
-        if (!iso) return null;
         await this.waitForGeoJSON();
-        const feature = this.findCountryFeature({ iso });
-        if (this.config.DEBUG_LOGS) {
-          console.debug('[Map] resolve focus', { iso, featureFound: !!feature });
-        }
+        const feature = this.findCountryFeature({ iso, name });
         if (!feature) return null;
         const center = this.getPolygonCenter(feature.geometry?.coordinates);
         if (!center) return null;
@@ -972,6 +995,8 @@
         this._unfocusTimer = null;
         this._sequence = 0;
         this._lastFocusKey = null;
+        this._countryIsoIndexBuilt = false;
+        this._countryIsoByName = new Map();
         this._onPointerOver = null;
         this._onPointerOut = null;
         this._onTap = null;
@@ -1090,27 +1115,13 @@
           if (sequence !== this._sequence) return;
           if (!item || item !== this._hoveredItem) return;
           const focus = this.getFocusFromItem(item);
-<<<<<<< ours
-<<<<<<< ours
           const focusKey = focus.iso || '';
           if (!focus.iso) return;
-=======
-=======
->>>>>>> theirs
-          const focusKey = (focus.iso || '') + '::' + (focus.name || '');
-          if (!focus.iso && !focus.name) return;
->>>>>>> theirs
           if (focusKey === this._lastFocusKey) return;
-          if (this.config.DEBUG_LOGS) {
-            console.debug('[Map] list focus start', { iso: focus.iso });
-          }
           const target = await this.countriesManager.resolveFocusTarget(focus);
           if (sequence !== this._sequence) return;
           if (!target) return;
           this._lastFocusKey = focusKey;
-          if (this.config.DEBUG_LOGS) {
-            console.debug('[Map] list focus target', { iso: focus.iso, focusCode: target.focusCode, center: target.center });
-          }
           this.countriesManager.setFocusedCountry(target.focusCode, 'list');
           const containerRect = this.map.getContainer()?.getBoundingClientRect?.();
           const containerHeight = containerRect?.height || 0;
@@ -1151,20 +1162,7 @@
           item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ISO + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
           item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
           null;
-<<<<<<< ours
-        if (!iso && this.config.DEBUG_LOGS) {
-          console.debug('[Map] list item missing ISO', { item });
-        }
         return { iso, name: null };
-=======
-        const name =
-          item.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) ||
-          item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_NAME + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) ||
-          item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) ||
-          item.textContent?.trim() ||
-          null;
-        return { iso, name };
->>>>>>> theirs
       }
     }
 
