@@ -1,5 +1,5 @@
 const CONFIG = {
-  STYLE_URL: 'mapbox://styles/ruslan-obel/cmit1vgga002501s612mlecmi', // Хостится в Mapbox
+  STYLE_URL: 'mapbox://styles/akimmaksimenka/cmjigq0ij001g01sg4bkg996c', // Хостится в Mapbox
   CONTAINER_ID: 'globe-map',
   INITIAL_CENTER: [12, 25], // Начальный центр: Европа в фокусе (долгота ~12°E, широта ~25°N)
   LATITUDE_MIN: -30, // Минимальная широта (ограничивает прокрутку к северному полюсу)
@@ -18,6 +18,7 @@ const CONFIG = {
   LIST_HOVER_UNFOCUS_DELAY_MS: 150,
   LIST_FOCUS_ANIMATION_DURATION_MS: 900,
   LIST_FOCUS_OFFSET_Y_RATIO: 0.15, // Сдвигает страну вверх при фокусе из списка (0.15 = 15% высоты контейнера)
+  DEBUG_LOGS: true,
   ATTRIBUTES: {
     COUNTRY_ITEM: 'data-map-country-item',
     LIST_ITEM: 'data-map-list-item',
@@ -850,7 +851,6 @@ class CountriesManager {
     if (!this.geojsonData?.features?.length) return null;
 
     const normalizedIso = normalizeIsoCode(iso);
-    const normalizedName = normalizeCountryName(name);
 
     if (normalizedIso) {
       const byA3 = this._featureByIsoA3.get(normalizedIso);
@@ -858,11 +858,6 @@ class CountriesManager {
 
       const byA2 = this._featureByIsoA2.get(normalizedIso);
       if (byA2) return byA2;
-    }
-
-    if (normalizedName) {
-      const byName = this._featureByName.get(normalizedName);
-      if (byName) return byName;
     }
 
     const matchesIso = (props) => {
@@ -878,34 +873,9 @@ class CountriesManager {
       return candidates.some((candidate) => normalizeIsoCode(candidate) === normalizedIso);
     };
 
-    const matchesName = (props) => {
-      if (!normalizedName) return false;
-      const candidates = [
-        props.name_en,
-        props.NAME_EN,
-        props.name,
-        props.NAME
-      ];
-      return candidates.some((candidate) => normalizeCountryName(candidate) === normalizedName);
-    };
-
-    const matchesNameLoosely = (props) => {
-      if (!normalizedName) return false;
-      const candidates = [
-        props.name_en,
-        props.NAME_EN,
-        props.name,
-        props.NAME
-      ]
-        .map((candidate) => normalizeCountryName(candidate))
-        .filter(Boolean);
-
-      return candidates.some((candidate) => candidate.includes(normalizedName) || normalizedName.includes(candidate));
-    };
-
     for (const feature of this.geojsonData.features) {
       const props = feature?.properties || {};
-      if (matchesIso(props) || matchesName(props) || matchesNameLoosely(props)) {
+      if (matchesIso(props)) {
         return feature;
       }
     }
@@ -995,9 +965,13 @@ class CountriesManager {
   }
 
   async resolveFocusTarget({ iso, name }) {
+    if (!iso) return null;
     await this.waitForGeoJSON();
 
-    const feature = this.findCountryFeature({ iso, name });
+    const feature = this.findCountryFeature({ iso });
+    if (this.config.DEBUG_LOGS) {
+      console.debug('[Map] resolve focus', { iso, featureFound: !!feature });
+    }
     if (!feature) return null;
 
     const center = this.getPolygonCenter(feature.geometry?.coordinates);
@@ -1301,15 +1275,29 @@ class CountryListFocusManager {
       if (!item || item !== this._hoveredItem) return;
 
       const focus = this.getFocusFromItem(item);
+<<<<<<< ours
+<<<<<<< ours
+      const focusKey = focus.iso || '';
+      if (!focus.iso) return;
+=======
+=======
+>>>>>>> theirs
       const focusKey = (focus.iso || '') + '::' + (focus.name || '');
       if (!focus.iso && !focus.name) return;
+>>>>>>> theirs
       if (focusKey === this._lastFocusKey) return;
 
+      if (this.config.DEBUG_LOGS) {
+        console.debug('[Map] list focus start', { iso: focus.iso });
+      }
       const target = await this.countriesManager.resolveFocusTarget(focus);
       if (sequence !== this._sequence) return;
       if (!target) return;
 
       this._lastFocusKey = focusKey;
+      if (this.config.DEBUG_LOGS) {
+        console.debug('[Map] list focus target', { iso: focus.iso, focusCode: target.focusCode, center: target.center });
+      }
       this.countriesManager.setFocusedCountry(target.focusCode, 'list');
 
       const containerRect = this.map.getContainer()?.getBoundingClientRect?.();
@@ -1348,6 +1336,12 @@ class CountryListFocusManager {
       item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ISO + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
       item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
       null;
+<<<<<<< ours
+    if (!iso && this.config.DEBUG_LOGS) {
+      console.debug('[Map] list item missing ISO', { item });
+    }
+    return { iso, name: null };
+=======
 
     const name =
       item.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) ||
@@ -1357,6 +1351,7 @@ class CountryListFocusManager {
       null;
 
     return { iso, name };
+>>>>>>> theirs
   }
 }
 
@@ -1970,16 +1965,15 @@ class TooltipManager {
     const normalizedIso = normalizeIsoCode(iso);
     if (normalizedIso) {
       const byIso = this._countryItemByIso.get(normalizedIso);
+      if (this.config.DEBUG_LOGS) {
+        console.debug('[Map] tooltip lookup by ISO', { iso: normalizedIso, found: !!byIso });
+      }
       if (byIso) return byIso;
     }
-
-    const normalizedName = normalizeCountryName(name);
-    if (normalizedName) {
-      const byName = this._countryItemByName.get(normalizedName);
-      if (byName) return byName;
+    if (this.config.DEBUG_LOGS) {
+      console.debug('[Map] tooltip lookup missing ISO', { iso: normalizedIso, name });
     }
-
-    return this.findCountryItemByName(name);
+    return null;
   }
 
   getMouseCoordinates(e) {
@@ -2033,6 +2027,9 @@ class TooltipManager {
 
       const geoJsonCountryName = this.getCountryNameFromProperties(features[0].properties);
       const geoJsonCountryIso = this.getCountryIsoFromProperties(features[0].properties);
+      if (this.config.DEBUG_LOGS) {
+        console.debug('[Map] hover feature', { iso: geoJsonCountryIso, name: geoJsonCountryName });
+      }
       if (this.countriesManager) {
         const focusCode = geoJsonCountryIso || null;
         if (focusCode !== this._lastHoverFocusCode) {
