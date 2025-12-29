@@ -8,13 +8,19 @@ const CONFIG = {
   INITIAL_LATITUDE_OFFSET: -30, // Глобус начинается с наклоном на -30 градусов по широте
   ENABLE_PROJECTION_FIX: true,
   COUNTRY_COLOR: '#F3223F',
+  COUNTRY_FOCUS_COLOR: '#C71F37',
   COUNTRY_STROKE_COLOR: '#FFFFFF',
   COUNTRY_STROKE_WIDTH: 1,
   COUNTRY_FILL_OPACITY: 0.9, // Увеличена непрозрачность для более насыщенного цвета
   COUNTRIES_GEOJSON_URL: 'https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson',
   MIN_COORDINATES_THRESHOLD: 10000,
+  LIST_HOVER_FOCUS_DELAY_MS: 120,
+  LIST_HOVER_UNFOCUS_DELAY_MS: 150,
+  LIST_FOCUS_ANIMATION_DURATION_MS: 900,
+  LIST_FOCUS_OFFSET_Y_RATIO: 0.15, // Сдвигает страну вверх при фокусе из списка (0.15 = 15% высоты контейнера)
   ATTRIBUTES: {
     COUNTRY_ITEM: 'data-map-country-item',
+    LIST_ITEM: 'data-map-list-item',
     COUNTRY_NAME: 'data-map-country-name',
     COUNTRY_ISO: 'data-map-country-iso',
     TOOLTIP: 'data-map-tooltip',
@@ -30,6 +36,32 @@ const CONFIG = {
   }
 };
 
+const COUNTRY_NAME_ALIASES = new Map([
+  ['czech rep', 'czech republic'],
+  ['czech rep.', 'czech republic'],
+  ['czechia', 'czech republic'],
+  ['cech rep', 'czech republic'],
+  ['cech rep.', 'czech republic']
+]);
+
+function normalizeIsoCode(value) {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return normalized;
+}
+
+function normalizeCountryName(value) {
+  const base = String(value ?? '').toLowerCase().trim();
+  if (!base) return '';
+
+  const cleaned = base
+    .replace(/[\u2019']/g, '')
+    .replace(/[().,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return COUNTRY_NAME_ALIASES.get(cleaned) || cleaned;
+}
+
 class MapController {
   constructor(config) {
     this.config = config;
@@ -39,9 +71,11 @@ class MapController {
     this.officesManager = null;
     this.tooltipManager = null;
     this.modalManager = null;
+    this.listFocusManager = null;
     this.wheelInterferenceProtectionActive = false;
     this._wheelInterferenceCleanup = null;
     this._wheelInterferenceMediaQuery = null;
+    this._cameraAnimationSequence = 0;
   }
 
   async loadStyle() {
@@ -142,6 +176,56 @@ class MapController {
       cachedTargetZoom = this.calculateGlobeZoom();
     };
 
+    this._setTargetZoom = (zoom) => {
+      cachedTargetZoom = zoom;
+    };
+
+    this._getTargetZoom = () => cachedTargetZoom;
+
+  }
+
+  easeToCamera({ center, zoom, duration, easing, offset }) {
+    if (!this.map) return;
+
+    const hasZoom = typeof zoom === 'number' && Number.isFinite(zoom);
+    const options = { duration, essential: true };
+
+    if (center) options.center = center;
+    if (hasZoom) options.zoom = zoom;
+    if (typeof easing === 'function') options.easing = easing;
+    if (Array.isArray(offset) && offset.length === 2) options.offset = offset;
+
+    this._cameraAnimationSequence += 1;
+    const sequence = this._cameraAnimationSequence;
+
+    if (hasZoom) {
+      this.map.setMinZoom(0);
+      this.map.setMaxZoom(22);
+      if (typeof this._setProgrammaticZoomChange === 'function') {
+        this._setProgrammaticZoomChange(true);
+      }
+      if (typeof this._setTargetZoom === 'function') {
+        this._setTargetZoom(zoom);
+      }
+
+      const finalize = () => {
+        if (sequence !== this._cameraAnimationSequence) return;
+        this.map.setMinZoom(zoom);
+        this.map.setMaxZoom(zoom);
+        if (typeof this._setProgrammaticZoomChange === 'function') {
+          this._setProgrammaticZoomChange(false);
+        }
+      };
+
+      if (duration > 0) {
+        this.map.once('moveend', finalize);
+      } else {
+        finalize();
+      }
+    }
+
+    this.map.stop();
+    this.map.easeTo(options);
   }
 
   fixProjectionScaler() {
@@ -319,6 +403,9 @@ class MapController {
     this.countriesManager.loadFromDOM();
     this.countriesManager.highlightCountries();
 
+    this.listFocusManager = new CountryListFocusManager(this, this.config, this.countriesManager);
+    this.listFocusManager.init();
+
     this.officesManager = new OfficesManager(this.map, this.config, this.geocodingService);
     
     await this.waitForOfficeElements();
@@ -331,7 +418,7 @@ class MapController {
     
     this.officesManager.setModalManager(this.modalManager);
 
-    this.tooltipManager = new TooltipManager(this.map, this.config);
+    this.tooltipManager = new TooltipManager(this.map, this.config, this.countriesManager);
     this.tooltipManager.init();
 
     this.setupScrollAnimation();
@@ -566,7 +653,7 @@ class MapController {
   }
 
   async waitForOfficeElements() {
-    const selector = `[${this.config.ATTRIBUTES.OFFICE_ADDRESS}]`;
+    const selector = '[' + this.config.ATTRIBUTES.OFFICE_ADDRESS + ']';
     const maxAttempts = 15;
     const checkInterval = 200;
     const mutationTimeout = 5000;
@@ -608,10 +695,19 @@ class CountriesManager {
     this.map = map;
     this.config = config;
     this.countries = [];
+    this.geojsonData = null;
+    this._geojsonLoadPromise = null;
+    this._focusedCountryCode = null;
+    this._listFocusedCountryCode = null;
+    this._mapHoverFocusedCountryCode = null;
+    this._featureIndexBuilt = false;
+    this._featureByIsoA3 = new Map();
+    this._featureByIsoA2 = new Map();
+    this._featureByName = new Map();
   }
 
   loadFromDOM() {
-    const items = document.querySelectorAll(`[${this.config.ATTRIBUTES.COUNTRY_ITEM}]`);
+    const items = document.querySelectorAll('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']');
     this.countries = Array.from(items).map(item => ({
       name: item.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME),
       iso: item.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO)
@@ -625,7 +721,9 @@ class CountriesManager {
       return;
     }
 
-    const countryISOs = this.countries.map(c => c.iso).filter(Boolean);
+    const countryISOs = this.countries.map(c => c.iso).filter(Boolean).map(normalizeIsoCode);
+    const countryIsoA3s = countryISOs.filter((code) => code.length === 3);
+    const countryIsoA2s = countryISOs.filter((code) => code.length === 2);
 
     ['highlighted-countries', 'highlighted-countries-stroke'].forEach(layerId => {
       if (this.map.getLayer(layerId)) {
@@ -645,7 +743,7 @@ class CountriesManager {
         tolerance: 0
       });
 
-      this.loadHighDetailGeoJSON(countriesGeoJSONSourceId, countryISOs);
+      this._geojsonLoadPromise = this.loadHighDetailGeoJSON(countriesGeoJSONSourceId, countryISOs);
     }
 
     const layerConfig = {
@@ -653,9 +751,13 @@ class CountriesManager {
       type: 'fill',
       source: countriesGeoJSONSourceId,
       filter: [
-        'in',
-        ['get', 'adm0_a3'],
-        ['literal', countryISOs]
+        'any',
+        ['in', ['get', 'adm0_a3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ADM0_A3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ISO_A3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'iso_a3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ISO_A2'], ['literal', countryIsoA2s]],
+        ['in', ['get', 'iso_a2'], ['literal', countryIsoA2s]]
       ],
       paint: {
         'fill-color': this.config.COUNTRY_COLOR,
@@ -668,9 +770,13 @@ class CountriesManager {
       type: 'line',
       source: countriesGeoJSONSourceId,
       filter: [
-        'in',
-        ['get', 'adm0_a3'],
-        ['literal', countryISOs]
+        'any',
+        ['in', ['get', 'adm0_a3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ADM0_A3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ISO_A3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'iso_a3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ISO_A2'], ['literal', countryIsoA2s]],
+        ['in', ['get', 'iso_a2'], ['literal', countryIsoA2s]]
       ],
       paint: {
         'line-color': this.config.COUNTRY_STROKE_COLOR,
@@ -691,7 +797,260 @@ class CountriesManager {
     }
   }
 
+  waitForGeoJSON() {
+    if (this.geojsonData) {
+      this.buildFeatureIndex();
+      return Promise.resolve(this.geojsonData);
+    }
+    if (this._geojsonLoadPromise) {
+      return this._geojsonLoadPromise.then(() => {
+        this.buildFeatureIndex();
+        return this.geojsonData;
+      });
+    }
+    return Promise.resolve(null);
+  }
+
+  normalizeString(value) {
+    return String(value ?? '').trim().toLowerCase();
+  }
+
+  buildFeatureIndex() {
+    if (this._featureIndexBuilt) return;
+    if (!this.geojsonData?.features?.length) return;
+
+    this._featureByIsoA3.clear();
+    this._featureByIsoA2.clear();
+    this._featureByName.clear();
+
+    for (const feature of this.geojsonData.features) {
+      const props = feature?.properties || {};
+
+      const isoA3 = normalizeIsoCode(
+        props.adm0_a3 || props.ADM0_A3 || props.ISO_A3 || props.iso_a3 || ''
+      );
+      const isoA2 = normalizeIsoCode(props.ISO_A2 || props.iso_a2 || '');
+      const name = normalizeCountryName(props.name_en || props.NAME_EN || props.name || props.NAME || '');
+
+      if (isoA3 && isoA3.length === 3 && !this._featureByIsoA3.has(isoA3)) {
+        this._featureByIsoA3.set(isoA3, feature);
+      }
+      if (isoA2 && isoA2.length === 2 && !this._featureByIsoA2.has(isoA2)) {
+        this._featureByIsoA2.set(isoA2, feature);
+      }
+      if (name && !this._featureByName.has(name)) {
+        this._featureByName.set(name, feature);
+      }
+    }
+
+    this._featureIndexBuilt = true;
+  }
+
+  findCountryFeature({ iso, name }) {
+    if (!this.geojsonData?.features?.length) return null;
+
+    const normalizedIso = normalizeIsoCode(iso);
+    const normalizedName = normalizeCountryName(name);
+
+    if (normalizedIso) {
+      const byA3 = this._featureByIsoA3.get(normalizedIso);
+      if (byA3) return byA3;
+
+      const byA2 = this._featureByIsoA2.get(normalizedIso);
+      if (byA2) return byA2;
+    }
+
+    if (normalizedName) {
+      const byName = this._featureByName.get(normalizedName);
+      if (byName) return byName;
+    }
+
+    const matchesIso = (props) => {
+      if (!normalizedIso) return false;
+      const candidates = [
+        props.adm0_a3,
+        props.ADM0_A3,
+        props.ISO_A3,
+        props.iso_a3,
+        props.ISO_A2,
+        props.iso_a2
+      ];
+      return candidates.some((candidate) => normalizeIsoCode(candidate) === normalizedIso);
+    };
+
+    const matchesName = (props) => {
+      if (!normalizedName) return false;
+      const candidates = [
+        props.name_en,
+        props.NAME_EN,
+        props.name,
+        props.NAME
+      ];
+      return candidates.some((candidate) => normalizeCountryName(candidate) === normalizedName);
+    };
+
+    const matchesNameLoosely = (props) => {
+      if (!normalizedName) return false;
+      const candidates = [
+        props.name_en,
+        props.NAME_EN,
+        props.name,
+        props.NAME
+      ]
+        .map((candidate) => normalizeCountryName(candidate))
+        .filter(Boolean);
+
+      return candidates.some((candidate) => candidate.includes(normalizedName) || normalizedName.includes(candidate));
+    };
+
+    for (const feature of this.geojsonData.features) {
+      const props = feature?.properties || {};
+      if (matchesIso(props) || matchesName(props) || matchesNameLoosely(props)) {
+        return feature;
+      }
+    }
+
+    return null;
+  }
+
+  getFeatureFocusCode(feature) {
+    const props = feature?.properties || {};
+    return props.adm0_a3 || props.ADM0_A3 || props.ISO_A3 || props.iso_a3 || props.ISO_A2 || props.iso_a2 || null;
+  }
+
+  getPolygonCenter(coords) {
+    const computeBboxCenter = (ring) => {
+      let minLng = Infinity, maxLng = -Infinity;
+      let minLat = Infinity, maxLat = -Infinity;
+
+      for (const point of ring || []) {
+        if (!Array.isArray(point) || typeof point[0] !== 'number' || typeof point[1] !== 'number') continue;
+        minLng = Math.min(minLng, point[0]);
+        maxLng = Math.max(maxLng, point[0]);
+        minLat = Math.min(minLat, point[1]);
+        maxLat = Math.max(maxLat, point[1]);
+      }
+
+      if (!Number.isFinite(minLng) || !Number.isFinite(minLat)) return null;
+      return {
+        center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2],
+        bboxArea: Math.max(0, (maxLng - minLng) * (maxLat - minLat))
+      };
+    };
+
+    const isRing = (value) => {
+      if (!Array.isArray(value) || value.length === 0) return false;
+      const first = value[0];
+      return Array.isArray(first) && typeof first[0] === 'number' && typeof first[1] === 'number';
+    };
+
+    const collectRings = (value, out) => {
+      if (!Array.isArray(value)) return;
+      if (isRing(value)) {
+        out.push(value);
+        return;
+      }
+      for (const item of value) {
+        collectRings(item, out);
+      }
+    };
+
+    const rings = [];
+    collectRings(coords, rings);
+
+    if (rings.length) {
+      let best = null;
+      for (const ring of rings) {
+        const bbox = computeBboxCenter(ring);
+        if (!bbox) continue;
+        if (!best || bbox.bboxArea > best.bboxArea) {
+          best = bbox;
+        }
+      }
+      if (best?.center) return best.center;
+    }
+
+    let minLng = Infinity, maxLng = -Infinity;
+    let minLat = Infinity, maxLat = -Infinity;
+
+    const flatten = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (const item of arr) {
+        if (Array.isArray(item?.[0])) {
+          flatten(item);
+        } else if (Array.isArray(item) && typeof item[0] === 'number' && typeof item[1] === 'number') {
+          minLng = Math.min(minLng, item[0]);
+          maxLng = Math.max(maxLng, item[0]);
+          minLat = Math.min(minLat, item[1]);
+          maxLat = Math.max(maxLat, item[1]);
+        }
+      }
+    };
+
+    flatten(coords);
+
+    if (!Number.isFinite(minLng) || !Number.isFinite(minLat)) return null;
+
+    return [(minLng + maxLng) / 2, (minLat + maxLat) / 2];
+  }
+
+  async resolveFocusTarget({ iso, name }) {
+    await this.waitForGeoJSON();
+
+    const feature = this.findCountryFeature({ iso, name });
+    if (!feature) return null;
+
+    const center = this.getPolygonCenter(feature.geometry?.coordinates);
+    if (!center) return null;
+
+    const focusCode = this.getFeatureFocusCode(feature);
+
+    return { center, focusCode };
+  }
+
+  setFocusedCountry(focusCode, source = 'list') {
+    const normalized = focusCode || null;
+
+    if (source === 'mapHover') {
+      this._mapHoverFocusedCountryCode = normalized;
+    } else {
+      this._listFocusedCountryCode = normalized;
+    }
+
+    this._focusedCountryCode = this._mapHoverFocusedCountryCode || this._listFocusedCountryCode || null;
+
+    const fillLayerId = 'highlighted-countries';
+    if (!this.map.getLayer(fillLayerId)) return;
+
+    if (!this._focusedCountryCode) {
+      this.map.setPaintProperty(fillLayerId, 'fill-color', this.config.COUNTRY_COLOR);
+      return;
+    }
+
+    const code = this._focusedCountryCode;
+    const focusedExpression = [
+      'case',
+      [
+        'any',
+        ['==', ['get', 'adm0_a3'], code],
+        ['==', ['get', 'ADM0_A3'], code],
+        ['==', ['get', 'ISO_A3'], code],
+        ['==', ['get', 'iso_a3'], code],
+        ['==', ['get', 'ISO_A2'], code],
+        ['==', ['get', 'iso_a2'], code]
+      ],
+      this.config.COUNTRY_FOCUS_COLOR,
+      this.config.COUNTRY_COLOR
+    ];
+
+    this.map.setPaintProperty(fillLayerId, 'fill-color', focusedExpression);
+  }
+
   async loadHighDetailGeoJSON(sourceId, countryISOs) {
+    const normalizedCountryISOs = (countryISOs || []).map(normalizeIsoCode);
+    const countryIsoA3s = normalizedCountryISOs.filter((code) => code.length === 3);
+    const countryIsoA2s = normalizedCountryISOs.filter((code) => code.length === 2);
+
     const sources = [
       'https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_10m_admin_0_countries.geojson',
       'https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_50m_admin_0_countries.geojson',
@@ -759,8 +1118,18 @@ class CountriesManager {
 
         const source = this.map.getSource(sourceId);
         source.setData(data);
+        this.geojsonData = data;
+        this._featureIndexBuilt = false;
 
-        const countryFilter = ['in', ['get', 'adm0_a3'], ['literal', countryISOs]];
+        const countryFilter = [
+          'any',
+          ['in', ['get', 'adm0_a3'], ['literal', countryIsoA3s]],
+          ['in', ['get', 'ADM0_A3'], ['literal', countryIsoA3s]],
+          ['in', ['get', 'ISO_A3'], ['literal', countryIsoA3s]],
+          ['in', ['get', 'iso_a3'], ['literal', countryIsoA3s]],
+          ['in', ['get', 'ISO_A2'], ['literal', countryIsoA2s]],
+          ['in', ['get', 'iso_a2'], ['literal', countryIsoA2s]]
+        ];
         ['highlighted-countries', 'highlighted-countries-stroke'].forEach(layerId => {
           if (this.map.getLayer(layerId)) {
             this.map.setFilter(layerId, countryFilter);
@@ -776,7 +1145,7 @@ class CountriesManager {
     }
 
     if (!loaded) {
-      this.loadFallbackGeoJSON(sourceId, countryISOs);
+      await this.loadFallbackGeoJSON(sourceId, countryISOs);
     }
   }
 
@@ -801,8 +1170,21 @@ class CountriesManager {
       });
 
       this.map.getSource(sourceId).setData(data);
+      this.geojsonData = data;
+      this._featureIndexBuilt = false;
 
-      const fallbackFilter = ['in', ['get', 'ISO_A2'], ['literal', countryISOs]];
+      const normalizedCountryISOs = (countryISOs || []).map(normalizeIsoCode);
+      const countryIsoA3s = normalizedCountryISOs.filter((code) => code.length === 3);
+      const countryIsoA2s = normalizedCountryISOs.filter((code) => code.length === 2);
+      const fallbackFilter = [
+        'any',
+        ['in', ['get', 'adm0_a3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ADM0_A3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ISO_A3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'iso_a3'], ['literal', countryIsoA3s]],
+        ['in', ['get', 'ISO_A2'], ['literal', countryIsoA2s]],
+        ['in', ['get', 'iso_a2'], ['literal', countryIsoA2s]]
+      ];
       ['highlighted-countries', 'highlighted-countries-stroke'].forEach(layerId => {
         if (this.map.getLayer(layerId)) {
           this.map.setFilter(layerId, fallbackFilter);
@@ -811,6 +1193,170 @@ class CountriesManager {
 
     } catch (error) {
     }
+  }
+}
+
+class CountryListFocusManager {
+  constructor(controller, config, countriesManager) {
+    this.controller = controller;
+    this.map = controller.map;
+    this.config = config;
+    this.countriesManager = countriesManager;
+    this._hoveredItem = null;
+    this._focusTimer = null;
+    this._unfocusTimer = null;
+    this._sequence = 0;
+    this._lastFocusKey = null;
+    this._onPointerOver = null;
+    this._onPointerOut = null;
+    this._mobileMediaQuery = null;
+  }
+
+  isMobileLayout() {
+    if (window.matchMedia) {
+      return window.matchMedia('(max-width: 991px)').matches;
+    }
+    return window.innerWidth <= 991;
+  }
+
+  init() {
+    const applyMode = () => {
+      if (this.isMobileLayout()) {
+        this.detach();
+        this.clearFocus();
+      } else {
+        this.attach();
+      }
+    };
+
+    applyMode();
+
+    if (window.matchMedia) {
+      this._mobileMediaQuery = window.matchMedia('(max-width: 991px)');
+      if (typeof this._mobileMediaQuery.addEventListener === 'function') {
+        this._mobileMediaQuery.addEventListener('change', applyMode);
+      } else if (typeof this._mobileMediaQuery.addListener === 'function') {
+        this._mobileMediaQuery.addListener(applyMode);
+      }
+    }
+  }
+
+  attach() {
+    if (this._onPointerOver || this._onPointerOut) return;
+
+    this._onPointerOver = (e) => {
+      const item = e.target?.closest?.('[' + this.config.ATTRIBUTES.LIST_ITEM + ']');
+      if (!item) return;
+      if (this._hoveredItem === item) return;
+
+      this._hoveredItem = item;
+      this.scheduleFocus(item);
+    };
+
+    this._onPointerOut = (e) => {
+      const item = e.target?.closest?.('[' + this.config.ATTRIBUTES.LIST_ITEM + ']');
+      if (!item) return;
+      if (item.contains(e.relatedTarget)) return;
+
+      if (this._hoveredItem === item) {
+        this._hoveredItem = null;
+      }
+      this.scheduleUnfocus();
+    };
+
+    document.addEventListener('pointerover', this._onPointerOver, true);
+    document.addEventListener('pointerout', this._onPointerOut, true);
+  }
+
+  detach() {
+    if (this._onPointerOver) {
+      document.removeEventListener('pointerover', this._onPointerOver, true);
+      this._onPointerOver = null;
+    }
+    if (this._onPointerOut) {
+      document.removeEventListener('pointerout', this._onPointerOut, true);
+      this._onPointerOut = null;
+    }
+    this.clearTimers();
+  }
+
+  clearTimers() {
+    if (this._focusTimer) {
+      clearTimeout(this._focusTimer);
+      this._focusTimer = null;
+    }
+    if (this._unfocusTimer) {
+      clearTimeout(this._unfocusTimer);
+      this._unfocusTimer = null;
+    }
+  }
+
+  scheduleFocus(item) {
+    this.clearTimers();
+    this._sequence += 1;
+    const sequence = this._sequence;
+
+    this._focusTimer = setTimeout(async () => {
+      if (sequence !== this._sequence) return;
+      if (!item || item !== this._hoveredItem) return;
+
+      const focus = this.getFocusFromItem(item);
+      const focusKey = (focus.iso || '') + '::' + (focus.name || '');
+      if (!focus.iso && !focus.name) return;
+      if (focusKey === this._lastFocusKey) return;
+
+      const target = await this.countriesManager.resolveFocusTarget(focus);
+      if (sequence !== this._sequence) return;
+      if (!target) return;
+
+      this._lastFocusKey = focusKey;
+      this.countriesManager.setFocusedCountry(target.focusCode, 'list');
+
+      const containerRect = this.map.getContainer()?.getBoundingClientRect?.();
+      const containerHeight = containerRect?.height || 0;
+      const offsetY = -containerHeight * (this.config.LIST_FOCUS_OFFSET_Y_RATIO || 0);
+
+      this.controller.easeToCamera({
+        center: target.center,
+        offset: [0, offsetY],
+        duration: this.config.LIST_FOCUS_ANIMATION_DURATION_MS,
+        easing: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+      });
+    }, this.config.LIST_HOVER_FOCUS_DELAY_MS);
+  }
+
+  scheduleUnfocus() {
+    this.clearTimers();
+    this._sequence += 1;
+    const sequence = this._sequence;
+
+    this._unfocusTimer = setTimeout(() => {
+      if (sequence !== this._sequence) return;
+      if (this._hoveredItem) return;
+      this.clearFocus();
+    }, this.config.LIST_HOVER_UNFOCUS_DELAY_MS);
+  }
+
+  clearFocus() {
+    this._lastFocusKey = null;
+    this.countriesManager.setFocusedCountry(null, 'list');
+  }
+
+  getFocusFromItem(item) {
+    const iso =
+      item.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
+      item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ISO + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
+      item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
+      null;
+
+    const name =
+      item.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) ||
+      item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_NAME + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) ||
+      item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) ||
+      item.textContent?.trim() ||
+      null;
+
+    return { iso, name };
   }
 }
 
@@ -827,18 +1373,18 @@ class GeocodingService {
       return this.cache.get(trimmedAddress);
     }
 
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(trimmedAddress)}.json`;
-    const response = await fetch(`${url}?access_token=${this.accessToken}`);
+    const url = 'https://api.mapbox.com/geocoding/v5/mapbox.places/' + encodeURIComponent(trimmedAddress) + '.json';
+    const response = await fetch(url + '?access_token=' + this.accessToken);
 
     if (!response.ok) {
-      throw new Error(`Geocoding failed: ${response.statusText}`);
+      throw new Error('Geocoding failed: ' + response.statusText);
     }
 
     const data = await response.json();
     const coordinates = data.features?.[0]?.center;
 
     if (!coordinates) {
-      throw new Error(`No results for address: ${trimmedAddress}`);
+      throw new Error('No results for address: ' + trimmedAddress);
     }
 
     this.cache.set(trimmedAddress, coordinates);
@@ -856,7 +1402,7 @@ class OfficesManager {
   }
 
   async loadFromDOM() {
-    const selector = `[${this.config.ATTRIBUTES.OFFICE_ADDRESS}]`;
+    const selector = '[' + this.config.ATTRIBUTES.OFFICE_ADDRESS + ']';
     const items = document.querySelectorAll(selector);
 
     for (const pinElement of items) {
@@ -866,7 +1412,7 @@ class OfficesManager {
         continue;
       }
 
-      const officeItem = pinElement.closest(`[${this.config.ATTRIBUTES.OFFICE_ITEM}]`);
+      const officeItem = pinElement.closest('[' + this.config.ATTRIBUTES.OFFICE_ITEM + ']');
 
       try {
         const coordinates = await this.geocodingService.geocodeAddress(address.trim());
@@ -986,7 +1532,7 @@ class ModalManager {
       if (this.isOpen) {
         const clickedElement = e.originalEvent?.target;
         const isModalClick = clickedElement && (
-          clickedElement.closest(`[${this.config.ATTRIBUTES.MODAL}]`) === this.currentModal
+          clickedElement.closest('[' + this.config.ATTRIBUTES.MODAL + ']') === this.currentModal
         );
         
         const isMarkerClick = clickedElement && clickedElement.closest('.mapboxgl-marker');
@@ -1015,10 +1561,10 @@ class ModalManager {
       return;
     }
 
-    let modal = document.querySelector(`[${this.config.ATTRIBUTES.MODAL}][data-office-address="${office.address}"]`);
+    let modal = document.querySelector('[' + this.config.ATTRIBUTES.MODAL + '][data-office-address=\"' + office.address + '\"]');
     
     if (!modal) {
-      modal = office.officeItem.querySelector(`[${this.config.ATTRIBUTES.MODAL}]`);
+      modal = office.officeItem.querySelector('[' + this.config.ATTRIBUTES.MODAL + ']');
     }
     
     if (!modal) {
@@ -1036,7 +1582,7 @@ class ModalManager {
     this.currentModal = modal;
     this._lastMarkerPosition = markerPosition;
 
-    const closeButton = modal.querySelector(`[${this.config.ATTRIBUTES.MODAL_CLOSE}]`);
+    const closeButton = modal.querySelector('[' + this.config.ATTRIBUTES.MODAL_CLOSE + ']');
     
     if (closeButton) {
       this.currentCloseButton = closeButton;
@@ -1106,14 +1652,14 @@ class ModalManager {
         handler: (element, value) => {
           if (value) element.textContent = value;
         },
-        getValue: () => officeItem.querySelector(`[${this.config.ATTRIBUTES.OFFICE_NAME}]`)?.textContent?.trim()
+        getValue: () => officeItem.querySelector('[' + this.config.ATTRIBUTES.OFFICE_NAME + ']')?.textContent?.trim()
       },
       {
         attr: this.config.ATTRIBUTES.OFFICE_DESCRIPTION,
         handler: (element, value) => {
           if (value) element.innerHTML = value;
         },
-        getValue: () => officeItem.querySelector(`[${this.config.ATTRIBUTES.OFFICE_DESCRIPTION}]`)?.innerHTML?.trim()
+        getValue: () => officeItem.querySelector('[' + this.config.ATTRIBUTES.OFFICE_DESCRIPTION + ']')?.innerHTML?.trim()
       },
       {
         attr: this.config.ATTRIBUTES.OFFICE_PHONE,
@@ -1121,12 +1667,12 @@ class ModalManager {
           if (value) {
             element.textContent = value;
             if (element.tagName === 'A') {
-              element.href = `tel:${value}`;
+              element.href = 'tel:' + value;
             }
           }
         },
         getValue: () => officeItem.getAttribute(this.config.ATTRIBUTES.OFFICE_PHONE) || 
-                       officeItem.querySelector(`[${this.config.ATTRIBUTES.OFFICE_PHONE}]`)?.textContent?.trim()
+                       officeItem.querySelector('[' + this.config.ATTRIBUTES.OFFICE_PHONE + ']')?.textContent?.trim()
       },
       {
         attr: this.config.ATTRIBUTES.OFFICE_EMAIL,
@@ -1134,12 +1680,12 @@ class ModalManager {
           if (value) {
             element.textContent = value;
             if (element.tagName === 'A') {
-              element.href = `mailto:${value}`;
+              element.href = 'mailto:' + value;
             }
           }
         },
         getValue: () => officeItem.getAttribute(this.config.ATTRIBUTES.OFFICE_EMAIL) || 
-                       officeItem.querySelector(`[${this.config.ATTRIBUTES.OFFICE_EMAIL}]`)?.textContent?.trim()
+                       officeItem.querySelector('[' + this.config.ATTRIBUTES.OFFICE_EMAIL + ']')?.textContent?.trim()
       },
       {
         attr: this.config.ATTRIBUTES.OFFICE_LINK,
@@ -1154,12 +1700,12 @@ class ModalManager {
           }
         },
         getValue: () => officeItem.getAttribute(this.config.ATTRIBUTES.OFFICE_LINK) || 
-                       officeItem.querySelector(`[${this.config.ATTRIBUTES.OFFICE_LINK}]`)?.getAttribute('href')
+                       officeItem.querySelector('[' + this.config.ATTRIBUTES.OFFICE_LINK + ']')?.getAttribute('href')
       }
     ];
 
     fieldMappings.forEach(({ attr, handler, getValue }) => {
-      const element = modal.querySelector(`[${attr}]`);
+      const element = modal.querySelector('[' + attr + ']');
       if (element) {
         handler(element, getValue());
       }
@@ -1206,8 +1752,8 @@ class ModalManager {
     
     Object.assign(modal.style, {
       position: 'fixed',
-      left: `${absoluteX + offsetPx}px`,
-      top: `${absoluteY}px`,
+      left: (absoluteX + offsetPx) + 'px',
+      top: absoluteY + 'px',
       right: '',
       bottom: '',
       width: '',
@@ -1255,9 +1801,10 @@ class ModalManager {
 }
 
 class TooltipManager {
-  constructor(map, config) {
+  constructor(map, config, countriesManager) {
     this.map = map;
     this.config = config;
+    this.countriesManager = countriesManager || null;
     this.tooltip = null;
     this.tooltipTemplate = null;
     this._hoverEnabled = false;
@@ -1265,6 +1812,10 @@ class TooltipManager {
     this._onMouseMove = null;
     this._onMouseLeave = null;
     this._onScroll = null;
+    this._countryItemIndexBuilt = false;
+    this._countryItemByIso = new Map();
+    this._countryItemByName = new Map();
+    this._lastHoverFocusCode = null;
   }
 
   isMobileLayout() {
@@ -1275,7 +1826,7 @@ class TooltipManager {
   }
 
   init() {
-    const tooltipInCollection = document.querySelector(`[${this.config.ATTRIBUTES.COUNTRY_ITEM}] [${this.config.ATTRIBUTES.TOOLTIP}]`);
+    const tooltipInCollection = document.querySelector('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + '] [' + this.config.ATTRIBUTES.TOOLTIP + ']');
     
     if (tooltipInCollection) {
       this.tooltipTemplate = tooltipInCollection;
@@ -1287,7 +1838,7 @@ class TooltipManager {
       document.body.appendChild(this.tooltip);
       
     } else {
-      this.tooltip = document.querySelector(`[${this.config.ATTRIBUTES.TOOLTIP}]`);
+      this.tooltip = document.querySelector('[' + this.config.ATTRIBUTES.TOOLTIP + ']');
       
       if (this.tooltip) {
       }
@@ -1356,17 +1907,21 @@ class TooltipManager {
 
   findCountryItemByName(geoJsonCountryName) {
     if (!geoJsonCountryName) return null;
+
+    if (!this._countryItemIndexBuilt) {
+      this.buildCountryItemIndex();
+    }
     
-    const countryItems = document.querySelectorAll(`[${this.config.ATTRIBUTES.COUNTRY_ITEM}]`);
+    const countryItems = document.querySelectorAll('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']');
     
-    const normalizedGeoJsonName = geoJsonCountryName.toLowerCase().trim();
+    const normalizedGeoJsonName = normalizeCountryName(geoJsonCountryName);
     
     for (const item of countryItems) {
       const countryName = item.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME);
       
       if (!countryName) continue;
       
-      const normalizedCollectionName = countryName.toLowerCase().trim();
+      const normalizedCollectionName = normalizeCountryName(countryName);
       
       if (normalizedCollectionName === normalizedGeoJsonName) {
         return item;
@@ -1379,6 +1934,52 @@ class TooltipManager {
     }
     
     return null;
+  }
+
+  buildCountryItemIndex() {
+    this._countryItemByIso.clear();
+    this._countryItemByName.clear();
+
+    const countryItems = document.querySelectorAll('[' + this.config.ATTRIBUTES.COUNTRY_ITEM + ']');
+    for (const item of countryItems) {
+    const iso =
+      item.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
+      item.querySelector?.('[' + this.config.ATTRIBUTES.COUNTRY_ISO + ']')?.getAttribute(this.config.ATTRIBUTES.COUNTRY_ISO) ||
+      null;
+      const name = item.getAttribute(this.config.ATTRIBUTES.COUNTRY_NAME) || null;
+
+      const normalizedIso = normalizeIsoCode(iso);
+      const normalizedName = normalizeCountryName(name);
+
+      if (normalizedIso && !this._countryItemByIso.has(normalizedIso)) {
+        this._countryItemByIso.set(normalizedIso, item);
+      }
+      if (normalizedName && !this._countryItemByName.has(normalizedName)) {
+        this._countryItemByName.set(normalizedName, item);
+      }
+    }
+
+    this._countryItemIndexBuilt = true;
+  }
+
+  findCountryItem({ iso, name }) {
+    if (!this._countryItemIndexBuilt) {
+      this.buildCountryItemIndex();
+    }
+
+    const normalizedIso = normalizeIsoCode(iso);
+    if (normalizedIso) {
+      const byIso = this._countryItemByIso.get(normalizedIso);
+      if (byIso) return byIso;
+    }
+
+    const normalizedName = normalizeCountryName(name);
+    if (normalizedName) {
+      const byName = this._countryItemByName.get(normalizedName);
+      if (byName) return byName;
+    }
+
+    return this.findCountryItemByName(name);
   }
 
   getMouseCoordinates(e) {
@@ -1401,6 +2002,18 @@ class TooltipManager {
     return properties.name_en || properties.NAME || properties.name || properties.NAME_EN || null;
   }
 
+  getCountryIsoFromProperties(properties) {
+    return (
+      properties.adm0_a3 ||
+      properties.ADM0_A3 ||
+      properties.ISO_A3 ||
+      properties.iso_a3 ||
+      properties.ISO_A2 ||
+      properties.iso_a2 ||
+      null
+    );
+  }
+
   setupMapHover() {
     if (this._onMouseMove) return;
 
@@ -1410,21 +2023,33 @@ class TooltipManager {
       });
 
       if (features.length === 0) {
+        if (this.countriesManager && this._lastHoverFocusCode) {
+          this._lastHoverFocusCode = null;
+          this.countriesManager.setFocusedCountry(null, 'mapHover');
+        }
         this.hide();
         return;
       }
 
       const geoJsonCountryName = this.getCountryNameFromProperties(features[0].properties);
+      const geoJsonCountryIso = this.getCountryIsoFromProperties(features[0].properties);
+      if (this.countriesManager) {
+        const focusCode = geoJsonCountryIso || null;
+        if (focusCode !== this._lastHoverFocusCode) {
+          this._lastHoverFocusCode = focusCode;
+          this.countriesManager.setFocusedCountry(focusCode, 'mapHover');
+        }
+      }
       if (!geoJsonCountryName) {
         this.hide();
         return;
       }
 
-      const countryItem = this.findCountryItemByName(geoJsonCountryName);
+      const countryItem = this.findCountryItem({ iso: geoJsonCountryIso, name: geoJsonCountryName });
       const { x: mouseX, y: mouseY } = this.getMouseCoordinates(e);
 
       if (countryItem) {
-        const tooltipInItem = countryItem.querySelector(`[${this.config.ATTRIBUTES.TOOLTIP}]`);
+        const tooltipInItem = countryItem.querySelector('[' + this.config.ATTRIBUTES.TOOLTIP + ']');
         
         if (tooltipInItem) {
           const tooltipText = tooltipInItem.textContent?.trim() || tooltipInItem.innerText?.trim() || geoJsonCountryName;
@@ -1445,10 +2070,18 @@ class TooltipManager {
     };
 
     this._onMouseLeave = () => {
+      if (this.countriesManager && this._lastHoverFocusCode) {
+        this._lastHoverFocusCode = null;
+        this.countriesManager.setFocusedCountry(null, 'mapHover');
+      }
       this.hide();
     };
 
     this._onScroll = () => {
+      if (this.countriesManager && this._lastHoverFocusCode) {
+        this._lastHoverFocusCode = null;
+        this.countriesManager.setFocusedCountry(null, 'mapHover');
+      }
       this.hide();
     };
 
@@ -1471,8 +2104,8 @@ class TooltipManager {
 
     Object.assign(this.tooltip.style, {
       display: 'block',
-      left: `${x + TOOLTIP_OFFSET}px`,
-      top: `${y + TOOLTIP_OFFSET}px`
+      left: (x + TOOLTIP_OFFSET) + 'px',
+      top: (y + TOOLTIP_OFFSET) + 'px'
     });
   }
 
